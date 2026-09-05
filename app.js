@@ -1,10 +1,17 @@
 import express from 'express';
 const app = express()
-import { config } from "./config/config.js"
+import { config } from "./config/config.env.js"
 import connectDb from './config/db.js';
+import cors from 'cors'
+import allRoutes from "./routes/index.js"
 
+
+app.use(cors())
 //middle ware to allow our app to read json data
 app.use(express.json())
+
+app.use(allRoutes);
+
 
 //one health check route
 app.get('/', (req, res) => {
