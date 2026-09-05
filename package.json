@@ -4,7 +4,8 @@
   "description": "Contents: Node.js, Express, TypeScript, MongoDB schemas, Docker configs, and BullMQ worker logic.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx watch app.ts"
   },
   "keywords": [],
   "author": "",
@@ -17,5 +18,13 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.24.4"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
 }

@@ -1,10 +1,11 @@
 
-import bcrypt, { genSalt } from 'bcrypt';
+import bcrypt from 'bcrypt';
 import { UserModel } from '../models/user.model.js'
+import type { Request, Response } from 'express';
 const saltRounds = 10;
 
 
-async function userRegistraction(req, res) {
+async function userRegistraction(req: Request, res: Response) {
     try {
 
         const { email, password, role } = req.body
@@ -23,8 +24,8 @@ async function userRegistraction(req, res) {
             }
         })
 
-    } catch (error) {
-        console.log("error-",error.message)
+    } catch (error: any) {
+        console.log("error-", error.message)
         return res.status(500).json({
             message: "Registration failed, please try again"
         });
@@ -32,4 +33,4 @@ async function userRegistraction(req, res) {
 }
 
 
-export {userRegistraction}
+export { userRegistraction }
