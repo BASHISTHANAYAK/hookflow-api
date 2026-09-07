@@ -61,8 +61,6 @@ async function mustLogin(req: Request, res: Response, next: NextFunction) {
 
 
 
-
-
 async function adminOnly(req: Request, res: Response, next: NextFunction) {
     try {
 
@@ -91,8 +89,6 @@ async function adminOnly(req: Request, res: Response, next: NextFunction) {
         });
     }
 }
-
-
 
 
 export { adminOnly, mustLogin };

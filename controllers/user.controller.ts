@@ -57,7 +57,7 @@ async function userLogin(req: Request, res: Response) {
                 message: "incorrect password",
             })
         }
-        let token =  jsonwebtoken.sign({ _id: getUser._id }, config.jwtToken, { expiresIn: '1h' });
+        let token = jsonwebtoken.sign({ _id: getUser._id }, config.jwtToken, { expiresIn: '1h' });
 
         console.log({ token })
         res.json({
