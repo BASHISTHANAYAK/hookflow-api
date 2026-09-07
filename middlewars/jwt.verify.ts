@@ -1,51 +1,14 @@
-// import type { NextFunction, Request, Response } from "express";
-// import jsonwebtoken, {type JwtPayload } from "jsonwebtoken";
-// import { config } from "../config/config.env.js";
-
-// async function adminOnly(req: Request, res: Response, next: NextFunction) {
-//     try {
-//         let token = (req.headers.key as string).split(" ")[1]
-//         console.log({ congigtoken: config.jwtToken, token })
-
-//         if (!token) {
-//             return res.status(401).json({
-//                 message: "unauthorized"
-//             })
-//         }
-
-//         //verify token
-//         let decoded = jsonwebtoken.verify(token, config.jwtToken) as JwtPayload;;
-//         if (decoded && decoded?._id) {
-//             console.log({ decoded })
-//             next()
-//         } else {
-//             return res.status(401).json({
-//                 message: "token validation failed"
-//             })
-//         }
-//     } catch (error: any) {
-//         console.log(error.message)
-//         return res.status(400).json({
-//             message: error.message || "validation failed"
-//         })
-//     }
-// }
-// export default adminOnly
-
-
-
-
-
-
-
-
-
-
 import type { NextFunction, Request, Response } from "express";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import { config } from "../config/config.env.js";
+import { UserModel } from "../models/user.model.js";
+import { ROLE } from "../config/config.model.js";
 
-function adminOnly(req: Request, res: Response, next: NextFunction) {
+
+
+//verify login
+
+async function mustLogin(req: Request, res: Response, next: NextFunction) {
     try {
         const authHeader = req.headers.authorization;
 
@@ -56,11 +19,14 @@ function adminOnly(req: Request, res: Response, next: NextFunction) {
         }
 
         const token = authHeader.split(" ")[1] as string;
+        console.log({ token })
 
         const decoded = jwt.verify(
             token,
             config.jwtToken
         ) as JwtPayload;
+
+        console.log({ decoded })
 
         if (!decoded?._id) {
             return res.status(401).json({
@@ -68,8 +34,18 @@ function adminOnly(req: Request, res: Response, next: NextFunction) {
             });
         }
 
-        req.user = decoded; // requires Express type extension
-        next();
+        //find user
+
+        const user = await UserModel.findById(decoded._id);
+
+        if (user) {
+            (req as any).user = { _id: user._id, role: user.role }; // requires Express type extension
+            return next();
+        }
+
+        return res.status(401).json({
+            message: "login first"
+        });
 
     } catch (error: unknown) {
         if (error instanceof Error) {
@@ -82,4 +58,41 @@ function adminOnly(req: Request, res: Response, next: NextFunction) {
     }
 }
 
-export default adminOnly;
+
+
+
+
+
+async function adminOnly(req: Request, res: Response, next: NextFunction) {
+    try {
+
+        if (!(req as any)?.user?._id) {
+            return res.status(401).json({
+                message: "please login"
+            });
+
+        }
+
+        if ((req as any)?.user?.role === ROLE?.admin) {
+            return next();
+        }
+
+        return res.status(401).json({
+            message: "not an admin"
+        });
+
+    } catch (error: unknown) {
+        if (error instanceof Error) {
+            console.log(error.message);
+        }
+
+        return res.status(401).json({
+            message: "Invalid or expired token"
+        });
+    }
+}
+
+
+
+
+export { adminOnly, mustLogin };
