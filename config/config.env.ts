@@ -8,4 +8,5 @@ export const config = {
     razorPaykey: process.env.RAZORPAY_APIKEY as string,
     razorPaySecret: process.env.RAZORPAY_Secret as string,
     razorpayPremiumPlanId: process.env.RAZORPAY_PREMIUM_PLAN_ID as string,
+    razorPayWebhookSecret: process.env.RAZOR_PAY_WEBHOOK_SECRET as string,
 }
