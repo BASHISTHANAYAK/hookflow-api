@@ -47,4 +47,51 @@ async function newSubscriptionLink(req: Request, res: Response) {
     }
 }
 
-export { newSubscriptionLink }
+
+// logged-in customers can view their own active plans
+async function myActivePlans(req: Request, res: Response) {
+    try {
+        const userId = (req as any).user._id
+        const page = Number(req.query.page) || 1
+        const limit = Number(req.query.limit) || 10
+
+        let skipDocuments = (page - 1) * limit
+
+
+        const getAllActiveSubscrptions = await SubscriptionModel.find({
+            userid: userId,
+            status: "Active"
+        }, {
+            _id: 0
+        }).skip(skipDocuments).limit(limit)
+
+        const totalDocLength = await SubscriptionModel.countDocuments({
+            userid: userId,
+            status: "Active"
+        })
+
+        if (!getAllActiveSubscrptions) {
+            return res.status(400).json({
+                message: "Subscrptions not found"
+            });
+        }
+
+        res.json({
+            mesage: "fetch all subscrptions",
+            pagination: {
+                page,
+                perPageLimit: limit,
+                totalNumberOfDocuments: totalDocLength
+            },
+            getAllActiveSubscrptions
+
+        })
+
+    } catch (error: any) {
+        return res.status(500).json({
+            message: "getting error while accessing active plans"
+        })
+    }
+}
+
+export { newSubscriptionLink, myActivePlans }

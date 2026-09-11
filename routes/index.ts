@@ -6,7 +6,7 @@ import allWebHooks from "./webhooks.route.js"
 
 router.use('/auth', userRouter)
 router.use('/api', subscrptionRoutes)
-router.use('/api', allWebHooks)
+// router.use('/api', allWebHooks)
 
 
 export default router

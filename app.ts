@@ -4,9 +4,14 @@ import { config } from "./config/config.env.js"
 import connectDb from './config/db.js';
 import cors from 'cors'
 import allRoutes from "./routes/index.js"
+import allWebHooks from "./routes/webhooks.route.js"
 
 
 app.use(cors())
+
+app.use('/api',allWebHooks)
+
+
 //middle ware to allow our app to read json data
 app.use(express.json())
 

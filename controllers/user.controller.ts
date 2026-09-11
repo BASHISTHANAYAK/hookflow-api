@@ -5,6 +5,7 @@ import type { Request, Response } from 'express';
 const saltRounds = 10;
 import jsonwebtoken from 'jsonwebtoken'
 import { config } from '../config/config.env.js';
+import { SubscriptionModel } from '../models/subscrption.model.js';
 
 
 async function userRegistraction(req: Request, res: Response) {
@@ -57,7 +58,7 @@ async function userLogin(req: Request, res: Response) {
                 message: "incorrect password",
             })
         }
-        let token = jsonwebtoken.sign({ _id: getUser._id }, config.jwtToken, { expiresIn: '1h' });
+        let token = jsonwebtoken.sign({ _id: getUser._id }, config.jwtToken, { expiresIn: '10h' });
 
         console.log({ token })
         res.json({
@@ -76,6 +77,5 @@ async function userLogin(req: Request, res: Response) {
         });
     }
 }
-
 
 export { userRegistraction, userLogin }

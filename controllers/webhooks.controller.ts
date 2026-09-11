@@ -3,7 +3,7 @@ import { config } from "../config/config.env.js";
 import { SubscriptionModel } from "../models/subscrption.model.js";
 import crypto from 'crypto';
 
-//razor pay Webhook
+// Razorpay Webhook
 async function razorWebhook(req: Request, res: Response) {
     try {
         const signature = req.headers['x-razorpay-signature'] as string;
@@ -14,7 +14,10 @@ async function razorWebhook(req: Request, res: Response) {
         }
 
         // 1. Convert the raw Buffer back to a string for hashing
-        const bodyString = req.body.toString();
+        // Fallback to JSON.stringify only if a global middleware accidentally parsed it
+        const bodyString = Buffer.isBuffer(req.body)
+            ? req.body.toString()
+            : JSON.stringify(req.body);
 
         const expectedSignature = crypto
             .createHmac('sha256', webhookSecret)
@@ -32,10 +35,15 @@ async function razorWebhook(req: Request, res: Response) {
             return res.status(400).send("Invalid signature");
         }
 
-        // 3. Parse the JSON manually now that security checks have passed
-        const payloadJson = JSON.parse(bodyString);
+        // 3. Parse the JSON payload safely
+        const payloadJson = Buffer.isBuffer(req.body) ? JSON.parse(bodyString) : req.body;
+
         const eventName = payloadJson.event;
         const subscriptionId = payloadJson.payload?.subscription?.entity?.id;
+
+        // Extract the next charge timestamp (convert Unix seconds to JS milliseconds)
+        const chargeAtTimestamp = payloadJson.payload?.subscription?.entity?.charge_at;
+        const nextDueDate = chargeAtTimestamp ? new Date(chargeAtTimestamp * 1000) : null;
 
         if (subscriptionId) {
             // 4. Complete Lifecycle Management
@@ -43,22 +51,30 @@ async function razorWebhook(req: Request, res: Response) {
                 case 'subscription.activated':
                 case 'subscription.authenticated':
                 case 'subscription.charged':
+                    // Dynamically build the update object to include dueDate if it exists
+                    const updateData: any = { status: 'Active' };
+                    if (nextDueDate) {
+                        updateData.dueDate = nextDueDate;
+                    }
+
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
-                        { status: 'Active' }
+                        updateData
                     );
                     break;
+
                 case 'subscription.pending':
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Overdue' }
                     );
                     break;
+
                 case 'subscription.halted':
                 case 'subscription.cancelled':
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
-                        { status: 'Cancelled' } // or 'Halted' based on your schema
+                        { status: 'Cancelled' }
                     );
                     break;
             }
@@ -71,4 +87,5 @@ async function razorWebhook(req: Request, res: Response) {
         return res.status(500).send("Internal Server Error");
     }
 }
+
 export { razorWebhook };
