@@ -5,7 +5,7 @@ import connectDb from './config/db.js';
 import cors from 'cors'
 import allRoutes from "./routes/index.js"
 import allWebHooks from "./routes/webhooks.route.js"
-
+import './workers/whatsapp.worker.js';
 
 app.use(cors())
 

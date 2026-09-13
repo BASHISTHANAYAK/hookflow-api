@@ -1,7 +1,13 @@
 import type { Request, Response } from "express";
 import { config } from "../config/config.env.js";
 import { SubscriptionModel } from "../models/subscrption.model.js";
+import { ProcessedWebhookModel } from "../models/ProcessedWebhook.model.js";
 import crypto from 'crypto';
+import { Queue } from 'bullmq';
+import { redisConnection } from '../config/redis.config.js';
+
+// queue instance
+const reminderQueue = new Queue('whatsapp-reminders', { connection: redisConnection });
 
 // Razorpay Webhook
 async function razorWebhook(req: Request, res: Response) {
@@ -35,7 +41,24 @@ async function razorWebhook(req: Request, res: Response) {
             return res.status(400).send("Invalid signature");
         }
 
-        // 3. Parse the JSON payload safely
+        // 3. Idempotency Lock — reject duplicate events before any further processing
+        const eventId = req.headers['x-razorpay-event-id'] as string | undefined;
+
+        if (eventId) {
+            try {
+                await ProcessedWebhookModel.create({ eventId });
+            } catch (idempotencyError: any) {
+                if (idempotencyError?.code === 11000) {
+                    // MongoDB duplicate key: this event was already processed
+                    console.log(`Duplicate webhook ignored: eventId=${eventId}`);
+                    return res.status(200).json({ status: "ok" });
+                }
+                // Any other DB error while locking should bubble up
+                throw idempotencyError;
+            }
+        }
+
+        // 4. Parse the JSON payload safely
         const payloadJson = Buffer.isBuffer(req.body) ? JSON.parse(bodyString) : req.body;
 
         const eventName = payloadJson.event;
@@ -46,7 +69,7 @@ async function razorWebhook(req: Request, res: Response) {
         const nextDueDate = chargeAtTimestamp ? new Date(chargeAtTimestamp * 1000) : null;
 
         if (subscriptionId) {
-            // 4. Complete Lifecycle Management
+            // 5. Complete Lifecycle Management
             switch (eventName) {
                 case 'subscription.activated':
                 case 'subscription.authenticated':
@@ -68,6 +91,16 @@ async function razorWebhook(req: Request, res: Response) {
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Overdue' }
                     );
+
+                    // We schedule the task to run 2 minutes (120,000 ms) in the future.
+                    // This offloads the heavy API call so the Express response is not delayed.
+                    await reminderQueue.add(
+                        'send-overdue-msg',
+                        { userId: subscriptionId },
+                        { delay: 120000 }
+                    );
+                    console.log("📦 Background job scheduled for 2 minutes from now");
+
                     break;
 
                 case 'subscription.halted':

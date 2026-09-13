@@ -11,11 +11,21 @@ import { SubscriptionModel } from '../models/subscrption.model.js';
 async function userRegistraction(req: Request, res: Response) {
     try {
 
-        const { email, password, role } = req.body
+        const { email, password, role, phoneNumber } = req.body
+        const phoneRegex = /^\+91\d{10}$/
+
+        // Only run the validation if a phone number was actually provided in the request
+        if (phoneNumber) {
+            if (phoneNumber.length !== 13 || !phoneRegex.test(phoneNumber)) {
+                return res.status(400).json({
+                    message: "Invalid phone number. It must start with +91 followed by 10 digits."
+                });
+            }
+        }
 
         const hashPassword = await bcrypt.hash(password, saltRounds)
 
-        const userCreated = await UserModel.create({ email, password: hashPassword, role })
+        const userCreated = await UserModel.create({ email, password: hashPassword, role, phoneNumber })
 
 
         res.json({
@@ -24,6 +34,7 @@ async function userRegistraction(req: Request, res: Response) {
                 _id: userCreated._id,
                 email: userCreated.email,
                 role: userCreated.role,
+                phoneNumber: userCreated.phoneNumber
             }
         })
 
@@ -66,6 +77,7 @@ async function userLogin(req: Request, res: Response) {
             getUser: {
                 email: getUser.email,
                 role: getUser.role,
+                phoneNumber: getUser.phoneNumber
             },
             token
         })
