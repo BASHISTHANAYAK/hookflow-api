@@ -3,9 +3,11 @@ const router = express.Router()
 import userRouter from "./user.route.js"
 import subscrptionRoutes from "./subscrption.route.js"
 import allWebHooks from "./webhooks.route.js"
+import adminRouter from "./admin.route.js"
 
 router.use('/auth', userRouter)
 router.use('/api', subscrptionRoutes)
+router.use('/api', adminRouter)
 // router.use('/api', allWebHooks)
 
 

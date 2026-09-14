@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { config } from "../config/config.env.js";
 import { SubscriptionModel } from "../models/subscrption.model.js";
 import { ProcessedWebhookModel } from "../models/ProcessedWebhook.model.js";
+import { TransactionModel } from "../models/transaction.model.js";
 import crypto from 'crypto';
 import { Queue } from 'bullmq';
 import { redisConnection } from '../config/redis.config.js';
@@ -72,19 +73,51 @@ async function razorWebhook(req: Request, res: Response) {
             // 5. Complete Lifecycle Management
             switch (eventName) {
                 case 'subscription.activated':
-                case 'subscription.authenticated':
-                case 'subscription.charged':
-                    // Dynamically build the update object to include dueDate if it exists
+                case 'subscription.authenticated': {
+                    // Mandate confirmed — mark active and set next due date, no money yet.
                     const updateData: any = { status: 'Active' };
-                    if (nextDueDate) {
-                        updateData.dueDate = nextDueDate;
-                    }
-
+                    if (nextDueDate) updateData.dueDate = nextDueDate;
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         updateData
                     );
                     break;
+                }
+
+                case 'subscription.charged': {
+                    // ── Money actually moved. Write to the immutable ledger ──────────────
+                    // Extract payment details from the webhook payload.
+                    const amountInPaise: number = payloadJson.payload?.payment?.entity?.amount ?? 0;
+                    const razorpayPaymentId: string = payloadJson.payload?.payment?.entity?.id ?? '';
+
+                    // Razorpay sends amounts in paise (₹999 → 99900). Convert to INR.
+                    const amountInRupees = amountInPaise / 100;
+
+                    // Single atomic DB call: update the subscription state AND get the
+                    // document back in one round-trip (eliminates findOne + findOneAndUpdate
+                    // double-write and the narrow race window between them).
+                    const chargedUpdateData: any = { status: 'Active' };
+                    if (nextDueDate) chargedUpdateData.dueDate = nextDueDate;
+
+                    const updatedSubscription = await SubscriptionModel.findOneAndUpdate(
+                        { razorpaySubscriptionId: subscriptionId },
+                        chargedUpdateData,
+                        { returnDocument: 'after' }
+                    );
+
+                    if (updatedSubscription) {
+                        // Append an immutable payment record to the ledger.
+                        await TransactionModel.create({
+                            userId: updatedSubscription.userid,
+                            razorpaySubscriptionId: subscriptionId,
+                            razorpayPaymentId,
+                            amount: amountInRupees,
+                            status: 'Success',
+                        });
+                        console.log(`💰 Transaction logged: ₹${amountInRupees} for user ${updatedSubscription.userid}`);
+                    }
+                    break;
+                }
 
                 case 'subscription.pending':
                     await SubscriptionModel.findOneAndUpdate(
@@ -96,7 +129,7 @@ async function razorWebhook(req: Request, res: Response) {
                     // This offloads the heavy API call so the Express response is not delayed.
                     await reminderQueue.add(
                         'send-overdue-msg',
-                        { userId: subscriptionId },
+                        { subscriptionId: subscriptionId },
                         { delay: 120000 }
                     );
                     console.log("📦 Background job scheduled for 2 minutes from now");
