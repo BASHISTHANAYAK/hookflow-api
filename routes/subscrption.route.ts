@@ -1,15 +1,17 @@
 //newSubscriptionLink
 import express from 'express';
-import { myActivePlans, newSubscriptionLink } from '../controllers/subscription.controller.js';
+import { myActivePlans, newSubscriptionLink, cancelSubscription } from '../controllers/subscription.controller.js';
 import { mustLogin } from '../middlewars/jwt.verify.js';
 const router = express.Router()
-// import { adminOnly, mustLogin } from '../middlewars/jwt.verify.js'
 
-
-//test jwt
+// Generate / fetch existing Razorpay payment link
 router.get('/generatepaymentLink', mustLogin, newSubscriptionLink)
-//myActivePlans
+
+// View own active plans (paginated)
 router.get('/myActivePlans', mustLogin, myActivePlans)
+
+// Cancel active subscription immediately
+router.post('/subscriptions/cancel', mustLogin, cancelSubscription)
 
 
 export default router

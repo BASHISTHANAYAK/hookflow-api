@@ -8,13 +8,14 @@ const subscrptionSchema = new mongoose.Schema({
 
     status: {
         type: String, enum: {
-            values: ['Active', 'Overdue', 'Cancelled', 'Pending'],
+            values: ['Active', 'Overdue', 'Cancelled', 'Pending', 'Completed', 'Paused'],
             message: '{VALUES} is not a valid status option',
             default: 'Pending'
         }
     },
     dueDate: { type: Date, default: null },
-})
+},
+{ timestamps: true }) // gives createdAt + updatedAt — needed for link freshness check
 
 export const SubscriptionModel = mongoose.model("subscription", subscrptionSchema)
 

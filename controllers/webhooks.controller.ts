@@ -143,6 +143,36 @@ async function razorWebhook(req: Request, res: Response) {
                         { status: 'Cancelled' }
                     );
                     break;
+
+                // Fired when all billing cycles (total_count) are exhausted.
+                // The subscription is finished — not cancelled by the user, just completed.
+                case 'subscription.completed':
+                    await SubscriptionModel.findOneAndUpdate(
+                        { razorpaySubscriptionId: subscriptionId },
+                        { status: 'Completed' }
+                    );
+                    console.log(`🏁 Subscription ${subscriptionId} completed all billing cycles`);
+                    break;
+
+                // Fired when Razorpay (or merchant) pauses the subscription.
+                // Billing is suspended but the subscription is not cancelled.
+                case 'subscription.paused':
+                    await SubscriptionModel.findOneAndUpdate(
+                        { razorpaySubscriptionId: subscriptionId },
+                        { status: 'Paused' }
+                    );
+                    console.log(`⏸️  Subscription ${subscriptionId} paused`);
+                    break;
+
+                // Fired when a paused subscription is resumed.
+                // Billing resumes — treat the same as activated.
+                case 'subscription.resumed':
+                    await SubscriptionModel.findOneAndUpdate(
+                        { razorpaySubscriptionId: subscriptionId },
+                        { status: 'Active' }
+                    );
+                    console.log(`▶️  Subscription ${subscriptionId} resumed → Active`);
+                    break;
             }
         }
 

@@ -10,5 +10,4 @@ export const config = {
     razorpayPremiumPlanId: process.env.RAZORPAY_PREMIUM_PLAN_ID as string,
     razorPayWebhookSecret: process.env.RAZOR_PAY_WEBHOOK_SECRET as string,
     redisUrl: process.env.REDIS_URL as string,
-    interaktApiKey: process.env.INTERAKT_API_KEY as string,
 }
