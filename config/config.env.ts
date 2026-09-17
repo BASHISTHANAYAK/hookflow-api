@@ -10,4 +10,6 @@ export const config = {
     razorpayPremiumPlanId: process.env.RAZORPAY_PREMIUM_PLAN_ID as string,
     razorPayWebhookSecret: process.env.RAZOR_PAY_WEBHOOK_SECRET as string,
     redisUrl: process.env.REDIS_URL as string,
+    interaktSecret:process.env.INTERAKT_SECRET,
+   frontendDashBoardUrl :process.env.DASHBOARD_URL
 }

@@ -107,36 +107,54 @@ async function razorWebhook(req: Request, res: Response) {
 
                     if (updatedSubscription) {
                         // Append an immutable payment record to the ledger.
-                        await TransactionModel.create({
-                            userId: updatedSubscription.userid,
-                            razorpaySubscriptionId: subscriptionId,
-                            razorpayPaymentId,
-                            amount: amountInRupees,
-                            status: 'Success',
-                        });
-                        console.log(`💰 Transaction logged: ₹${amountInRupees} for user ${updatedSubscription.userid}`);
+                        // Wrapped in try/catch: if razorpayPaymentId already exists (error
+                        // code 11000), a duplicate event fired (e.g. payment.captured AND
+                        // subscription.charged for the same payment). Log and skip safely.
+                        try {
+                            await TransactionModel.create({
+                                userId: updatedSubscription.userid,
+                                razorpaySubscriptionId: subscriptionId,
+                                razorpayPaymentId,
+                                amount: amountInRupees,
+                                status: 'Success',
+                            });
+                            console.log(`💰 Transaction logged: ₹${amountInRupees} for user ${updatedSubscription.userid}`);
+                        } catch (txErr: any) {
+                            if (txErr?.code === 11000) {
+                                console.warn(`⚠️  Duplicate transaction skipped — razorpayPaymentId ${razorpayPaymentId} already exists.`);
+                            } else {
+                                throw txErr; // unexpected DB error — let outer catch handle it
+                            }
+                        }
                     }
                     break;
                 }
 
                 case 'subscription.pending':
+                case 'subscription.halted': {
+                    // Both pending (first retry) and halted (all retries exhausted)
+                    // mean the user's payment failed. Set to Overdue in both cases.
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Overdue' }
                     );
 
-                    // We schedule the task to run 2 minutes (120,000 ms) in the future.
-                    // This offloads the heavy API call so the Express response is not delayed.
+                    // Queue a WhatsApp reminder via BullMQ (fires 2 minutes later).
+                    // dashboardUrl is mapped to the {{2}} variable in the Interakt
+                    // WhatsApp template — directs the user to their billing page
+                    // where the React frontend will open the card-change checkout.
                     await reminderQueue.add(
                         'send-overdue-msg',
-                        { subscriptionId: subscriptionId },
+                        {
+                            subscriptionId,
+                            dashboardUrl:config.frontendDashBoardUrl,
+                        },
                         { delay: 120000 }
                     );
-                    console.log("📦 Background job scheduled for 2 minutes from now");
-
+                    console.log(`📦 Overdue reminder queued for subscription ${subscriptionId} (event: ${eventName})`);
                     break;
+                }
 
-                case 'subscription.halted':
                 case 'subscription.cancelled':
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
