@@ -11,7 +11,7 @@ import { SubscriptionModel } from '../models/subscrption.model.js';
 async function userRegistraction(req: Request, res: Response) {
     try {
 
-        const { email, password, role, phoneNumber } = req.body
+        const { email, password, phoneNumber } = req.body
         const phoneRegex = /^\+91\d{10}$/
 
         // Only run the validation if a phone number was actually provided in the request
@@ -25,8 +25,10 @@ async function userRegistraction(req: Request, res: Response) {
 
         const hashPassword = await bcrypt.hash(password, saltRounds)
 
-        const userCreated = await UserModel.create({ email, password: hashPassword, role, phoneNumber })
+        const userCreated = await UserModel.create({ email, password: hashPassword, phoneNumber })
 
+        // Generate JWT token for auto-login
+        let token = jsonwebtoken.sign({ _id: userCreated._id }, config.jwtToken, { expiresIn: '10h' });
 
         res.json({
             message: "registraction successful",
@@ -35,7 +37,8 @@ async function userRegistraction(req: Request, res: Response) {
                 email: userCreated.email,
                 role: userCreated.role,
                 phoneNumber: userCreated.phoneNumber
-            }
+            },
+            token
         })
 
     } catch (error: any) {
@@ -53,7 +56,7 @@ async function userLogin(req: Request, res: Response) {
     try {
 
         const { email, password } = req.body
-
+        console.log("reqBody:", req.body)
         const getUser = await UserModel.findOne({ email })
 
         if (!getUser) {

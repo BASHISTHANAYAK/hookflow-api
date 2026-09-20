@@ -9,7 +9,7 @@ async function getAdminUsers(req: Request, res: Response) {
         const skip  = (page - 1) * limit;
 
         // -- Concurrent queries -------------------------------------------------
-        // Run the aggregation and the total count in parallel — no sequential
+        // Run the aggregation and the total count in parallel â€” no sequential
         // waterfall, both hit the DB at the same time.
         const [users, total] = await Promise.all([
 
@@ -18,7 +18,13 @@ async function getAdminUsers(req: Request, res: Response) {
             // replaces what would otherwise be: find all users ? for each user,
             // query subscriptions ? stitch manually.
             UserModel.aggregate([
-                // 1. Join the subscriptions collection on userid
+                // 1. Filter out ADMIN users - only show CUSTOMER users
+                {
+                    $match: {
+                        role: 'CUSTOMER'
+                    }
+                },
+                // 2. Join the subscriptions collection on userid
                 {
                     $lookup: {
                         from: 'subscriptions',        // Mongoose pluralises model name "subscription"
@@ -36,7 +42,7 @@ async function getAdminUsers(req: Request, res: Response) {
                         preserveNullAndEmptyArrays: true,
                     },
                 },
-                // 3. Pagination at the DB level — skip/limit before projecting
+                // 3. Pagination at the DB level â€” skip/limit before projecting
                 //    keeps memory usage constant regardless of collection size.
                 { $skip: skip },
                 { $limit: limit },

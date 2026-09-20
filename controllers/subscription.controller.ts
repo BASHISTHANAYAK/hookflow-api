@@ -9,8 +9,13 @@ const instance = new Razorpay({ key_id: config.razorPaykey, key_secret: config.r
 async function newSubscriptionLink(req: Request, res: Response) {
     try {
         console.log("inside newSubscriptionLink...");
+        console.log("📥 Received req.body:", req.body);
         const userId = (req as any).user?._id;
         console.log({ userId });
+
+        // useSdk defaults to true (for Razorpay modal checkout) unless explicitly set to false
+        const useSdk = req.body?.useSdk === false || req.body?.useSdk === 'false' ? false : true;
+        console.log("⚙️ Computed useSdk value:", useSdk);
 
         const TWENTY_FOUR_HOURS_AGO = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
@@ -47,6 +52,15 @@ async function newSubscriptionLink(req: Request, res: Response) {
                 existingSubscription.linkGeneratedAt >= TWENTY_FOUR_HOURS_AGO
             ) {
                 console.log(`✅ Fresh Pending link (linkGeneratedAt < 24h) for user ${userId}. Returning cached link.`);
+                if (useSdk) {
+                    console.log("📤 Responding with SDK flow format (cached):", { success: true, subscriptionId: existingSubscription.razorpaySubscriptionId });
+                    return res.status(200).json({
+                        success: true,
+                        subscriptionId: existingSubscription.razorpaySubscriptionId,
+                    });
+                }
+
+                console.log("📤 Responding with redirect flow format (cached):", { success: true, paymentLink: existingSubscription.paymentLink, subscriptionId: existingSubscription.razorpaySubscriptionId });
                 return res.status(200).json({
                     success: true,
                     paymentLink: existingSubscription.paymentLink,
@@ -74,19 +88,34 @@ async function newSubscriptionLink(req: Request, res: Response) {
             // Only here do we create a brand-new Razorpay subscription.
             // Cancelled = user churned and wants to re-subscribe.
             // Stale Pending = user never completed checkout; old link is dead.
-            console.log(`🔄 Creating new Razorpay subscription. Status: ${existingSubscription.status}`);
+            console.log(`🔄 Creating new Razorpay subscription. Status: ${existingSubscription.status}, useSdk: ${useSdk}`);
 
-            const newRazorpaySubscription = await instance.subscriptions.create({
+            const subscriptionOptions: any = {
                 plan_id: config.razorpayPremiumPlanId,
-                customer_notify: true,
                 quantity: 1,
-                total_count: 12,
-            });
+                customer_notify: !useSdk,
+            };
+            console.log("📤 Razorpay options passed to instance.subscriptions.create():", subscriptionOptions);
 
-            if (!newRazorpaySubscription || !newRazorpaySubscription.short_url) {
+            let newRazorpaySubscription;
+            try {
+                newRazorpaySubscription = await instance.subscriptions.create(subscriptionOptions);
+                console.log({ fullRazSubReturn: newRazorpaySubscription });
+            } catch (error: any) {
+                console.error("❌ Razorpay subscription creation error:", error);
+                console.error("Raw error object:", JSON.stringify(error, null, 2));
+                console.error("Deep error.error:", error?.error);
                 return res.status(502).json({
                     success: false,
-                    message: 'Failed to generate payment link from Razorpay',
+                    message: 'Failed to generate subscription from Razorpay',
+                    error: error?.error || error?.message || error?.description || 'Unknown error'
+                });
+            }
+
+            if (!newRazorpaySubscription || !newRazorpaySubscription.id || (!useSdk && !newRazorpaySubscription.short_url)) {
+                return res.status(502).json({
+                    success: false,
+                    message: useSdk ? 'Failed to generate subscription from Razorpay' : 'Failed to generate payment link from Razorpay',
                 });
             }
 
@@ -96,13 +125,22 @@ async function newSubscriptionLink(req: Request, res: Response) {
                 { userid: userId },
                 {
                     razorpaySubscriptionId: newRazorpaySubscription.id,
-                    paymentLink: newRazorpaySubscription.short_url,
+                    paymentLink: newRazorpaySubscription.short_url || null,
                     status: 'Pending',
                     amount: PLAN_PRICE,
                     linkGeneratedAt: new Date(),
                 }
             );
 
+            if (useSdk) {
+                console.log("📤 Responding with SDK flow format:", { success: true, subscriptionId: newRazorpaySubscription.id });
+                return res.status(200).json({
+                    success: true,
+                    subscriptionId: newRazorpaySubscription.id,
+                });
+            }
+
+            console.log("📤 Responding with redirect flow format:", { success: true, paymentLink: newRazorpaySubscription.short_url, subscriptionId: newRazorpaySubscription.id });
             return res.status(200).json({
                 success: true,
                 paymentLink: newRazorpaySubscription.short_url,
@@ -111,19 +149,34 @@ async function newSubscriptionLink(req: Request, res: Response) {
         }
 
         // ── Case 5: No existing subscription — first time user ───────────────
-        const subscription = await instance.subscriptions.create({
+        console.log(`🆕 Creating first-time subscription for user ${userId}, useSdk: ${useSdk}`);
+
+        const subscriptionOptions: any = {
             plan_id: config.razorpayPremiumPlanId,
-            customer_notify: true,
             quantity: 1,
-            total_count: 12,
-        });
+            customer_notify: !useSdk,
+        };
+        console.log("📤 Razorpay options passed to instance.subscriptions.create():", subscriptionOptions);
 
-        console.log({ fullRazSubReturn: subscription });
-
-        if (!subscription || !subscription.short_url) {
+        let subscription;
+        try {
+            subscription = await instance.subscriptions.create(subscriptionOptions);
+            console.log({ fullRazSubReturn: subscription });
+        } catch (error: any) {
+            console.error("❌ Razorpay subscription creation error:", error);
+            console.error("Raw error object:", JSON.stringify(error, null, 2));
+            console.error("Deep error.error:", error?.error);
             return res.status(502).json({
                 success: false,
-                message: 'Failed to generate payment link from Razorpay',
+                message: 'Failed to generate subscription from Razorpay',
+                error: error?.error || error?.message || error?.description || 'Unknown error'
+            });
+        }
+
+        if (!subscription || !subscription.id || (!useSdk && !subscription.short_url)) {
+            return res.status(502).json({
+                success: false,
+                message: useSdk ? 'Failed to generate subscription from Razorpay' : 'Failed to generate payment link from Razorpay',
             });
         }
 
@@ -131,12 +184,21 @@ async function newSubscriptionLink(req: Request, res: Response) {
         await SubscriptionModel.create({
             userid: userId,
             razorpaySubscriptionId: subscription.id,
-            paymentLink: subscription.short_url,
+            paymentLink: subscription.short_url || null,
             status: 'Pending',
             amount: PLAN_PRICE,
             linkGeneratedAt: new Date(),
         });
 
+        if (useSdk) {
+            console.log("📤 Responding with SDK flow format:", { success: true, subscriptionId: subscription.id });
+            return res.status(200).json({
+                success: true,
+                subscriptionId: subscription.id,
+            });
+        }
+
+        console.log("📤 Responding with redirect flow format:", { success: true, paymentLink: subscription.short_url, subscriptionId: subscription.id });
         return res.status(200).json({
             success: true,
             paymentLink: subscription.short_url,
@@ -163,15 +225,13 @@ async function myActivePlans(req: Request, res: Response) {
 
 
         const getAllActiveSubscrptions = await SubscriptionModel.find({
-            userid: userId,
-            status: "Active"
+            userid: userId
         }, {
             _id: 0
         }).skip(skipDocuments).limit(limit)
 
         const totalDocLength = await SubscriptionModel.countDocuments({
-            userid: userId,
-            status: "Active"
+            userid: userId
         })
 
         if (!getAllActiveSubscrptions) {
@@ -181,14 +241,19 @@ async function myActivePlans(req: Request, res: Response) {
         }
 
         res.json({
-            mesage: "fetch all subscrptions",
+            message: "fetch all subscriptions",
             pagination: {
                 page,
                 perPageLimit: limit,
                 totalNumberOfDocuments: totalDocLength
             },
-            getAllActiveSubscrptions
-
+            subscriptions: getAllActiveSubscrptions,
+            planInfo: {
+                price: PLAN_PRICE,
+                currency: 'INR',
+                duration: 'monthly',
+                interval: 1
+            }
         })
 
     } catch (error: any) {

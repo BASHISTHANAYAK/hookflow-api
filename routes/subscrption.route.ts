@@ -5,7 +5,7 @@ import { mustLogin } from '../middlewars/jwt.verify.js';
 const router = express.Router()
 
 // Generate / fetch existing Razorpay payment link
-router.get('/generatepaymentLink', mustLogin, newSubscriptionLink)
+router.post('/billing/generate-link', mustLogin, newSubscriptionLink)
 
 // View own active plans (paginated)
 router.get('/myActivePlans', mustLogin, myActivePlans)

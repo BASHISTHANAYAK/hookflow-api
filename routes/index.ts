@@ -8,7 +8,7 @@ import adminRouter from "./admin.route.js"
 router.use('/auth', userRouter)
 router.use('/api', subscrptionRoutes)
 router.use('/api', adminRouter)
-// router.use('/api', allWebHooks)
+router.use('/api', allWebHooks)
 
 
 export default router
