@@ -9,7 +9,6 @@ const instance = new Razorpay({ key_id: config.razorPaykey, key_secret: config.r
 async function newSubscriptionLink(req: Request, res: Response) {
     try {
         console.log("inside newSubscriptionLink...");
-        console.log("📥 Received req.body:", req.body);
         const userId = (req as any).user?._id;
         console.log({ userId });
 
@@ -18,6 +17,7 @@ async function newSubscriptionLink(req: Request, res: Response) {
         console.log("⚙️ Computed useSdk value:", useSdk);
 
         const TWENTY_FOUR_HOURS_AGO = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        console.log({ TWENTY_FOUR_HOURS_AGO })
 
         const existingSubscription = await SubscriptionModel.findOne({ userid: userId });
 
@@ -31,10 +31,10 @@ async function newSubscriptionLink(req: Request, res: Response) {
                 });
             }
 
-            // ── Case 2: Paused ONLY — block. ─────────────────────────────────
+            // ── Case 2: Paused ONLY — block. 
             // A Paused subscription is intentionally suspended by Razorpay/merchant.
             // The user should resume it, not create a brand-new one.
-            // NOTE: 'Overdue' is intentionally NOT blocked here — overdue users
+            // : 'Overdue' is intentionally NOT blocked here — overdue users
             // must be allowed to generate a fresh checkout link (see Case 4).
             if (existingSubscription.status === 'Paused') {
                 return res.status(400).json({
@@ -93,6 +93,7 @@ async function newSubscriptionLink(req: Request, res: Response) {
             const subscriptionOptions: any = {
                 plan_id: config.razorpayPremiumPlanId,
                 quantity: 1,
+                total_count: 12,
                 customer_notify: !useSdk,
             };
             console.log("📤 Razorpay options passed to instance.subscriptions.create():", subscriptionOptions);
@@ -148,12 +149,13 @@ async function newSubscriptionLink(req: Request, res: Response) {
             });
         }
 
-        // ── Case 5: No existing subscription — first time user ───────────────
+        // ── Case 5: No existing subscription — first time user -
         console.log(`🆕 Creating first-time subscription for user ${userId}, useSdk: ${useSdk}`);
 
         const subscriptionOptions: any = {
             plan_id: config.razorpayPremiumPlanId,
             quantity: 1,
+            total_count: 12,
             customer_notify: !useSdk,
         };
         console.log("📤 Razorpay options passed to instance.subscriptions.create():", subscriptionOptions);
@@ -180,7 +182,7 @@ async function newSubscriptionLink(req: Request, res: Response) {
             });
         }
 
-        // Create the subscription doc — amount from backend config, never req.body.
+        // Create the subscription doc — amount from backend config.
         await SubscriptionModel.create({
             userid: userId,
             razorpaySubscriptionId: subscription.id,

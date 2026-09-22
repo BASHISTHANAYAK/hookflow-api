@@ -65,6 +65,8 @@ async function razorWebhook(req: Request, res: Response) {
         const eventName = payloadJson.event;
         const subscriptionId = payloadJson.payload?.subscription?.entity?.id;
 
+        console.log(`🔔 WEBHOOK RECEIVED - Event: ${eventName} | Subscription ID: ${subscriptionId} | Event ID: ${eventId}`);
+
         // Extract the next charge timestamp (convert Unix seconds to JS milliseconds)
         const chargeAtTimestamp = payloadJson.payload?.subscription?.entity?.charge_at;
         const nextDueDate = chargeAtTimestamp ? new Date(chargeAtTimestamp * 1000) : null;
@@ -75,29 +77,39 @@ async function razorWebhook(req: Request, res: Response) {
                 case 'subscription.activated':
                 case 'subscription.authenticated': {
                     // Mandate confirmed — mark active and set next due date, no money yet.
+                    console.log(`✅ [${eventName}] Mandate confirmed - Setting status to Active`);
                     const updateData: any = { status: 'Active' };
-                    if (nextDueDate) updateData.dueDate = nextDueDate;
-                    await SubscriptionModel.findOneAndUpdate(
+                    if (nextDueDate) {
+                        updateData.dueDate = nextDueDate;
+                        console.log(`📅 Next due date set to: ${nextDueDate.toISOString()}`);
+                    }
+                    const result = await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         updateData
                     );
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Active`);
                     break;
                 }
 
                 case 'subscription.charged': {
                     // ── Money actually moved. Write to the immutable ledger ──────────────
                     // Extract payment details from the webhook payload.
+                    console.log(`💰 [subscription.charged] Payment successful - Processing transaction`);
                     const amountInPaise: number = payloadJson.payload?.payment?.entity?.amount ?? 0;
                     const razorpayPaymentId: string = payloadJson.payload?.payment?.entity?.id ?? '';
 
                     // Razorpay sends amounts in paise (₹999 → 99900). Convert to INR.
                     const amountInRupees = amountInPaise / 100;
+                    console.log(`💵 Payment Amount: ₹${amountInRupees} | Payment ID: ${razorpayPaymentId}`);
 
                     // Single atomic DB call: update the subscription state AND get the
                     // document back in one round-trip (eliminates findOne + findOneAndUpdate
                     // double-write and the narrow race window between them).
                     const chargedUpdateData: any = { status: 'Active' };
-                    if (nextDueDate) chargedUpdateData.dueDate = nextDueDate;
+                    if (nextDueDate) {
+                        chargedUpdateData.dueDate = nextDueDate;
+                        console.log(`📅 Next due date updated to: ${nextDueDate.toISOString()}`);
+                    }
 
                     const updatedSubscription = await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
@@ -106,6 +118,7 @@ async function razorWebhook(req: Request, res: Response) {
                     );
 
                     if (updatedSubscription) {
+                        console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Active`);
                         // Append an immutable payment record to the ledger.
                         // Wrapped in try/catch: if razorpayPaymentId already exists (error
                         // code 11000), a duplicate event fired (e.g. payment.captured AND
@@ -118,7 +131,7 @@ async function razorWebhook(req: Request, res: Response) {
                                 amount: amountInRupees,
                                 status: 'Success',
                             });
-                            console.log(`💰 Transaction logged: ₹${amountInRupees} for user ${updatedSubscription.userid}`);
+                            console.log(`✅ Transaction logged: ₹${amountInRupees} for user ${updatedSubscription.userid}`);
                         } catch (txErr: any) {
                             if (txErr?.code === 11000) {
                                 console.warn(`⚠️  Duplicate transaction skipped — razorpayPaymentId ${razorpayPaymentId} already exists.`);
@@ -134,10 +147,12 @@ async function razorWebhook(req: Request, res: Response) {
                 case 'subscription.halted': {
                     // Both pending (first retry) and halted (all retries exhausted)
                     // mean the user's payment failed. Set to Overdue in both cases.
+                    console.log(`⚠️ [${eventName}] Payment failed - Setting status to Overdue`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Overdue' }
                     );
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Overdue`);
 
                     // Queue a WhatsApp reminder via BullMQ (fires 2 minutes later).
                     // dashboardUrl is mapped to the {{2}} variable in the Interakt
@@ -151,45 +166,54 @@ async function razorWebhook(req: Request, res: Response) {
                         },
                         { delay: 120000 }
                     );
-                    console.log(`📦 Overdue reminder queued for subscription ${subscriptionId} (event: ${eventName})`);
+                    console.log(`📦 Overdue reminder queued for subscription ${subscriptionId} (event: ${eventName}) - Will send in 2 minutes (MOCK)`);
                     break;
                 }
 
                 case 'subscription.cancelled':
+                    console.log(`🚫 [subscription.cancelled] Subscription cancelled by user`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Cancelled' }
                     );
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Cancelled`);
                     break;
 
                 // Fired when all billing cycles (total_count) are exhausted.
                 // The subscription is finished — not cancelled by the user, just completed.
                 case 'subscription.completed':
+                    console.log(`🏁 [subscription.completed] All billing cycles completed`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Completed' }
                     );
-                    console.log(`🏁 Subscription ${subscriptionId} completed all billing cycles`);
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Completed`);
                     break;
 
                 // Fired when Razorpay (or merchant) pauses the subscription.
                 // Billing is suspended but the subscription is not cancelled.
                 case 'subscription.paused':
+                    console.log(`⏸️ [subscription.paused] Subscription paused by Razorpay/merchant`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Paused' }
                     );
-                    console.log(`⏸️  Subscription ${subscriptionId} paused`);
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Paused`);
                     break;
 
                 // Fired when a paused subscription is resumed.
                 // Billing resumes — treat the same as activated.
                 case 'subscription.resumed':
+                    console.log(`▶️ [subscription.resumed] Subscription resumed - Setting status to Active`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Active' }
                     );
-                    console.log(`▶️  Subscription ${subscriptionId} resumed → Active`);
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Active`);
+                    break;
+
+                default:
+                    console.log(`⚠️ [${eventName}] Event not handled - No action taken`);
                     break;
             }
         }

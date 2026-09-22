@@ -4,5 +4,5 @@ export const ROLE = {
 }
 
 
-export const PLAN_PRICE = 500; // INR;
+export const PLAN_PRICE = 1000; // INR;
 
