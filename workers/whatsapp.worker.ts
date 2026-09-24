@@ -1,48 +1,117 @@
-// this is the logic/process  part that will eventually sends our Interakt API messages.
-
 import { Worker } from 'bullmq';
 import { redisConnection } from '../config/redis.config.js';
 import { SubscriptionModel } from '../models/subscrption.model.js';
 import { UserModel } from '../models/user.model.js';
+import { config } from '../config/config.env.js';
+import { interaktTemplates } from '../config/config.model.js';
 
-//  This worker constantly listens to the 'whatsapp-reminders' queue.
-// When a delayed job's timer hits zero, this code executes automatically in the background.
-export const whatsappWorker = new Worker('whatsapp-reminders', async (job) => {
-    // 1. Unpack the real ID we sent from the webhook controller
-    const { subscriptionId } = job.data;
-    console.log(`🔍 Looking up data for Razorpay Subscription: ${subscriptionId}`);
+const INTERAKT_API_URL = 'https://api.interakt.ai/v1/public/message/';
 
-    // 2. Find the subscription document to get the internal user ID
-    const subscription = await SubscriptionModel.findOne({ razorpaySubscriptionId: subscriptionId });
-    if (!subscription) {
-        throw new Error(`Subscription ${subscriptionId} not found in database`);
-    }
+// This worker constantly listens to the 'whatsapp-reminders' queue and delivers
+// real WhatsApp template messages using Interakt's public API.
+export const whatsappWorker = new Worker(
+    'whatsapp-reminders',
+    async (job) => {
+        // 1. Unpack job parameters
+        const { subscriptionId, template } = job.data;
+        const templateName = template || interaktTemplates.pending;
 
-    // 3. Find the user document to get their phone number
-    const user = await UserModel.findById(subscription.userid);
-    if (!user || !user.phoneNumber) {
-        throw new Error(`User or phone number missing for subscription ${subscriptionId}`);
-    }
-    // 4. Mock API — simulates an Interakt WhatsApp send without real KYC/business verification.
-    //    Extract country code and local number from the E.164 phone number (e.g. "+919876543210").
-    const phoneRaw = user.phoneNumber.replace(/\s+/g, ''); // strip any spaces
-    const match = phoneRaw.match(/^\+(\d{1,3})(\d+)$/);
-    if (!match) {
-        throw new Error(`Phone number "${user.phoneNumber}" is not in valid E.164 format`);
-    }
-    const countryCode = match[1];   // e.g. "91"
-    const localNumber = match[2];   // e.g. "9876543210"
+        console.log(`\n📨 [WHATSAPP WORKER] Processing job ${job.id} for subscription: ${subscriptionId}`);
+        console.log(`📋 Selected Template: "${templateName}"`);
 
-    console.log(`📞 Parsed phone → Country Code: +${countryCode} | Local Number: ${localNumber}`);
-    console.log(`⏳ [MOCK API] Simulating network latency...`);
+        // 2. Ensure Interakt API secret is configured
+        if (!config.interaktSecret) {
+            const secretErr = 'INTERAKT_SECRET is missing or not configured in environment variables.';
+            console.error(`❌ [INTERAKT CONFIG ERROR] ${secretErr}`);
+            throw new Error(secretErr);
+        }
 
-    // Simulate the ~1-second round-trip of a real HTTP call to Interakt.
-    await new Promise(resolve => setTimeout(resolve, 1000));
+        // 3. Find the subscription document to retrieve user ID
+        const subscription = await SubscriptionModel.findOne({ razorpaySubscriptionId: subscriptionId });
+        if (!subscription) {
+            const notFoundErr = `Subscription ${subscriptionId} not found in database`;
+            console.error(`❌ [WHATSAPP WORKER] ${notFoundErr}`);
+            throw new Error(notFoundErr);
+        }
 
-    // Confirm the (mock) message was "sent".
-    console.log(`✅ [MOCK API SUCCESS] WhatsApp payment reminder successfully "sent" to ${user.email}!`);
+        // 4. Find the user to retrieve contact details and name
+        const user = await UserModel.findById(subscription.userid);
+        if (!user || !user.phoneNumber) {
+            const userErr = `User or phone number missing for subscription ${subscriptionId}`;
+            console.error(`❌ [WHATSAPP WORKER] ${userErr}`);
+            throw new Error(userErr);
+        }
 
-}, { connection: redisConnection });
+        // 5. Parse phone number into countryCode and local phoneNumber
+        const phoneRaw = user.phoneNumber.replace(/\s+/g, '');
+        const match = phoneRaw.match(/^\+(\d{1,3})(\d+)$/);
+        if (!match) {
+            const formatErr = `Phone number "${user.phoneNumber}" is not in valid E.164 format`;
+            console.error(`❌ [WHATSAPP WORKER] ${formatErr}`);
+            throw new Error(formatErr);
+        }
 
-whatsappWorker.on('completed', job => console.log(`✅ Job ${job.id} completed`));
-whatsappWorker.on('failed', (job, err) => console.log(`❌ Job failed: ${err.message}`));
+        const countryCode = `+${match[1]}`;   // e.g. "+91"
+        const localNumber = match[2];         // e.g. "9876543210"
+        const fullPhoneNumber = `${match[1]}${match[2]}`; // e.g. "919876543210"
+
+        // 6. Template parameter {{1}} = Customer name (from user.name or user.email)
+        const customerName = (user as any).name || user.email || 'Customer';
+
+        // 7. Construct Interakt message payload matching standard template format
+        const payload = {
+            countryCode,
+            phoneNumber: localNumber,
+            fullPhoneNumber,
+            type: 'Template',
+            template: {
+                name: templateName,
+                languageCode: 'en',
+                bodyValues: [customerName],
+            },
+        };
+
+        const authHeader = config.interaktSecret.startsWith('Basic ')
+            ? config.interaktSecret
+            : `Basic ${config.interaktSecret}`;
+
+        console.log(`📤 [INTERAKT REQUEST] Sending WhatsApp message:`, {
+            recipient: user.phoneNumber,
+            customerName,
+            template: templateName,
+        });
+
+        // 8. Make the actual HTTP request to Interakt API
+        const response = await fetch(INTERAKT_API_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': authHeader,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+        });
+
+        const responseData: any = await response.json().catch(() => null);
+
+        // 9. Handle Interakt response and errors
+        if (!response.ok || (responseData && responseData.result === false)) {
+            console.error(`❌ [INTERAKT ERROR] Request failed with HTTP ${response.status}:`, responseData);
+            const errorMsg = responseData?.message || `Interakt API responded with HTTP ${response.status}`;
+            throw new Error(`Interakt API Error: ${errorMsg}`);
+        }
+
+        console.log(`✅ [INTERAKT SUCCESS] WhatsApp reminder sent successfully!`, {
+            messageId: responseData?.id,
+            result: responseData?.result,
+            template: templateName,
+            recipient: user.phoneNumber,
+            email: user.email,
+        });
+
+        return responseData;
+    },
+    { connection: redisConnection }
+);
+
+whatsappWorker.on('completed', (job) => console.log(`🎉 [QUEUE] Job ${job.id} completed successfully`));
+whatsappWorker.on('failed', (job, err) => console.error(`💥 [QUEUE] Job ${job?.id} failed: ${err.message}`));

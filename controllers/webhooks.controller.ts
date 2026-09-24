@@ -3,6 +3,7 @@ import { config } from "../config/config.env.js";
 import { SubscriptionModel } from "../models/subscrption.model.js";
 import { ProcessedWebhookModel } from "../models/ProcessedWebhook.model.js";
 import { TransactionModel } from "../models/transaction.model.js";
+import { interaktTemplates } from "../config/config.model.js";
 import crypto from 'crypto';
 import { Queue } from 'bullmq';
 import { redisConnection } from '../config/redis.config.js';
@@ -143,30 +144,43 @@ async function razorWebhook(req: Request, res: Response) {
                     break;
                 }
 
-                case 'subscription.pending':
-                case 'subscription.halted': {
-                    // Both pending (first retry) and halted (all retries exhausted)
-                    // mean the user's payment failed. Set to Overdue in both cases.
-                    console.log(`⚠️ [${eventName}] Payment failed - Setting status to Overdue`);
+                case 'subscription.pending': {
+                    console.log(`⚠️ [subscription.pending] Payment retry pending - Setting status to Overdue`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
                         { status: 'Overdue' }
                     );
                     console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Overdue`);
 
-                    // Queue a WhatsApp reminder via BullMQ (fires 2 minutes later).
-                    // dashboardUrl is mapped to the {{2}} variable in the Interakt
-                    // WhatsApp template — directs the user to their billing page
-                    // where the React frontend will open the card-change checkout.
+                    // Queue WhatsApp payment retry reminder immediately via BullMQ
                     await reminderQueue.add(
                         'send-overdue-msg',
                         {
                             subscriptionId,
-                            dashboardUrl:config.frontendDashBoardUrl,
-                        },
-                        { delay: 120000 }
+                            template: interaktTemplates.pending
+                        }
                     );
-                    console.log(`📦 Overdue reminder queued for subscription ${subscriptionId} (event: ${eventName}) - Will send in 2 minutes (MOCK)`);
+                    console.log(`📦 Payment retry reminder queued immediately for subscription ${subscriptionId} (template: ${interaktTemplates.pending})`);
+                    break;
+                }
+
+                case 'subscription.halted': {
+                    console.log(`🚨 [subscription.halted] Payment retries exhausted - Setting status to Overdue`);
+                    await SubscriptionModel.findOneAndUpdate(
+                        { razorpaySubscriptionId: subscriptionId },
+                        { status: 'Overdue' }
+                    );
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Overdue`);
+
+                    // Queue critical payment failure WhatsApp reminder immediately via BullMQ
+                    await reminderQueue.add(
+                        'send-overdue-msg',
+                        {
+                            subscriptionId,
+                            template: interaktTemplates.halted
+                        }
+                    );
+                    console.log(`📦 Critical payment failed reminder queued immediately for subscription ${subscriptionId} (template: ${interaktTemplates.halted})`);
                     break;
                 }
 

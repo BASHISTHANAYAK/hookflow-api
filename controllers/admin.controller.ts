@@ -1,8 +1,9 @@
-﻿import type { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { TransactionModel } from '../models/transaction.model.js';
 import { SubscriptionModel } from '../models/subscrption.model.js';
 import { Queue } from 'bullmq';
 import { redisConnection } from '../config/redis.config.js';
+import { interaktTemplates } from '../config/config.model.js';
 
 // Shared queue instance — same channel the webhook controller writes to,
 // same channel the whatsapp worker listens on.
@@ -91,7 +92,10 @@ async function simulateFailure(req: Request, res: Response) {
         //    Payload matches exactly what the worker expects to unpack.
         await reminderQueue.add(
             'send-overdue-msg',
-            { subscriptionId: subscription.razorpaySubscriptionId },
+            {
+                subscriptionId: subscription.razorpaySubscriptionId,
+                template: interaktTemplates.pending,
+            },
             { delay: 0 }
         );
 
