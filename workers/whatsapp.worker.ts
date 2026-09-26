@@ -44,25 +44,36 @@ export const whatsappWorker = new Worker(
 
         // 5. Parse phone number into countryCode and local phoneNumber
         const phoneRaw = user.phoneNumber.replace(/\s+/g, '');
-        const match = phoneRaw.match(/^\+(\d{1,3})(\d+)$/);
-        if (!match) {
-            const formatErr = `Phone number "${user.phoneNumber}" is not in valid E.164 format`;
-            console.error(`❌ [WHATSAPP WORKER] ${formatErr}`);
-            throw new Error(formatErr);
+        let countryCode: string;
+        let localNumber: string;
+
+        if (phoneRaw.startsWith('+91') && phoneRaw.length === 13) {
+            // Standard Indian E.164: +91 followed by 10-digit mobile number
+            countryCode = '+91';
+            localNumber = phoneRaw.slice(3);
+        } else {
+            // General 1-3 digit country code followed by 10-digit number
+            const match = phoneRaw.match(/^\+(\d{1,3})(\d{10})$/);
+            if (!match) {
+                const formatErr = `Phone number "${user.phoneNumber}" is not in valid format (expected +91XXXXXXXXXX)`;
+                console.error(`❌ [WHATSAPP WORKER] ${formatErr}`);
+                throw new Error(formatErr);
+            }
+            countryCode = `+${match[1] as string}`;
+            localNumber = match[2] as string;
         }
 
-        const countryCode = `+${match[1]}`;   // e.g. "+91"
-        const localNumber = match[2];         // e.g. "9876543210"
-        const fullPhoneNumber = `${match[1]}${match[2]}`; // e.g. "919876543210"
+        // 6. Template parameter {{1}} = Customer name (fallback to email username)
+        const customerName = (user as any).name || (user.email ? user.email.split('@')[0] : 'Customer');
 
-        // 6. Template parameter {{1}} = Customer name (from user.name or user.email)
-        const customerName = (user as any).name || user.email || 'Customer';
-
-        // 7. Construct Interakt message payload matching standard template format
+        // 7. Construct Interakt message payload matching Send-Templates-NoHeader spec
+        // NOTE: Do NOT send fullPhoneNumber alongside countryCode+phoneNumber as Interakt's
+        // validator considers that conflicting and throws "'countryCode' is not valid".
         const payload = {
             countryCode,
             phoneNumber: localNumber,
-            fullPhoneNumber,
+            template_category: 'utility',
+            callbackData: subscriptionId,
             type: 'Template',
             template: {
                 name: templateName,
@@ -76,7 +87,8 @@ export const whatsappWorker = new Worker(
             : `Basic ${config.interaktSecret}`;
 
         console.log(`📤 [INTERAKT REQUEST] Sending WhatsApp message:`, {
-            recipient: user.phoneNumber,
+            countryCode,
+            phoneNumber: localNumber,
             customerName,
             template: templateName,
         });
@@ -103,8 +115,10 @@ export const whatsappWorker = new Worker(
         console.log(`✅ [INTERAKT SUCCESS] WhatsApp reminder sent successfully!`, {
             messageId: responseData?.id,
             result: responseData?.result,
+            message: responseData?.message,
             template: templateName,
-            recipient: user.phoneNumber,
+            recipient: `${countryCode}${localNumber}`,
+            customerName,
             email: user.email,
         });
 
