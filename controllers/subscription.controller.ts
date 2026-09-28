@@ -2,6 +2,7 @@ import { type Request, type Response } from 'express';
 import Razorpay from 'razorpay';
 import { config } from '../config/config.env.js';
 import { SubscriptionModel } from '../models/subscrption.model.js';
+import { TransactionModel } from '../models/transaction.model.js';
 import { PLAN_PRICE } from '../config/config.model.js';
 
 const instance = new Razorpay({ key_id: config.razorPaykey, key_secret: config.razorPaySecret });
@@ -23,7 +24,7 @@ async function newSubscriptionLink(req: Request, res: Response) {
 
         if (existingSubscription) {
 
-            // ── Case 1: Already active — block. User has a paid plan. ─────────
+            // ── Case 1: Active — block. User already has a running paid plan. ─
             if (existingSubscription.status === 'Active') {
                 return res.status(400).json({
                     success: false,
@@ -31,63 +32,54 @@ async function newSubscriptionLink(req: Request, res: Response) {
                 });
             }
 
-            // ── Case 2: Paused ONLY — block. 
-            // A Paused subscription is intentionally suspended by Razorpay/merchant.
-            // The user should resume it, not create a brand-new one.
-            // : 'Overdue' is intentionally NOT blocked here — overdue users
-            // must be allowed to generate a fresh checkout link (see Case 4).
+            // ── Case 2: Paused — block. Instruct user to contact admin. ──────
+            // Paused subscriptions cannot be resumed directly via checkout.
             if (existingSubscription.status === 'Paused') {
                 return res.status(400).json({
                     success: false,
-                    message: 'Your subscription is currently paused. Please resume it to continue.',
+                    message: 'Your subscription is currently paused. Please contact an admin to resume your subscription.',
                 });
             }
 
-            // ── Case 3: Pending + fresh link (linkGeneratedAt < 24h) ──────────
-            // Use linkGeneratedAt — NOT updatedAt. updatedAt changes on every
-            // webhook status update and would give a false "fresh" signal.
+            // ── Case 3: PaymentFailed - Cancel old and create new subscription ───
+            // Card update (subscription_card_change: 1) causes order lock deadlock in Test Mode.
+            // Order gets locked by previous payment authorization, cannot pay again.
+            // Cancel old subscription and create new one for immediate activation.
+            if (existingSubscription.status === 'PaymentFailed') {
+                console.log(`💳 PaymentFailed user ${userId} — canceling old sub and creating new one.`);
+                if (existingSubscription.razorpaySubscriptionId) {
+                    try {
+                        await instance.subscriptions.cancel(existingSubscription.razorpaySubscriptionId, false);
+                        console.log(`✅ Old subscription ${existingSubscription.razorpaySubscriptionId} cancelled`);
+                    } catch (err: any) {
+                        console.warn('Failed to cancel old subscription:', err?.message || err);
+                    }
+                }
+                // Fall through to create new subscription (same as Halted flow)
+            }
+
+            // ── Case 4: Pending (Initial checkout before first payment) ───────
+            // If the link was generated within the last 24h, return cached link.
+            // If linkGeneratedAt is null or older than 24h, fall through to create a new one.
             if (
                 existingSubscription.status === 'Pending' &&
                 existingSubscription.linkGeneratedAt &&
                 existingSubscription.linkGeneratedAt >= TWENTY_FOUR_HOURS_AGO
             ) {
-                console.log(`✅ Fresh Pending link (linkGeneratedAt < 24h) for user ${userId}. Returning cached link.`);
-                if (useSdk) {
-                    console.log("📤 Responding with SDK flow format (cached):", { success: true, subscriptionId: existingSubscription.razorpaySubscriptionId });
-                    return res.status(200).json({
-                        success: true,
-                        subscriptionId: existingSubscription.razorpaySubscriptionId,
-                    });
-                }
-
-                console.log("📤 Responding with redirect flow format (cached):", { success: true, paymentLink: existingSubscription.paymentLink, subscriptionId: existingSubscription.razorpaySubscriptionId });
+                console.log(`✅ Fresh Pending initial checkout for user ${userId}. Returning cached link.`);
                 return res.status(200).json({
                     success: true,
-                    paymentLink: existingSubscription.paymentLink,
+                    paymentLink: useSdk ? undefined : existingSubscription.paymentLink,
                     subscriptionId: existingSubscription.razorpaySubscriptionId,
                 });
             }
 
-            // ── Case 4: Overdue — "Keep Alive" flow ──────────────────────────
-            // DO NOT cancel the subscription. DO NOT create a new one.
-            // Return the existing razorpaySubscriptionId so the React frontend
-            // can open a Razorpay checkout with subscription_card_change: 1.
-            // This lets the user update their card against the SAME subscription
-            // mandate — Razorpay retries the charge automatically once the card
-            // is updated. Zero double-charge risk.
-            if (existingSubscription.status === 'Overdue') {
-                console.log(`💳 Overdue user ${userId} — returning existing sub ID for card-change flow.`);
-                return res.status(200).json({
-                    success: true,
-                    requiresCardUpdate: true,
-                    razorpaySubscriptionId: existingSubscription.razorpaySubscriptionId,
-                });
-            }
-
-            // ── Case 5: Cancelled or stale Pending (linkGeneratedAt > 24h) ───
-            // Only here do we create a brand-new Razorpay subscription.
-            // Cancelled = user churned and wants to re-subscribe.
-            // Stale Pending = user never completed checkout; old link is dead.
+            // ── Case 5: Halted, Cancelled, PaymentFailed, or Stale Pending (> 24h / null) ────
+            // - PaymentFailed: Mandate failed; cancelled old sub and creating fresh subscription.
+            // - Halted: All retries exhausted. Cannot update card in India; must create fresh subscription.
+            // - Cancelled: User cancelled and wants to re-subscribe.
+            // - Stale Pending: Old checkout link expired.
+            // All of these fall through here to generate a fresh Razorpay subscription and overwrite the DB doc.
             console.log(`🔄 Creating new Razorpay subscription. Status: ${existingSubscription.status}, useSdk: ${useSdk}`);
 
             const subscriptionOptions: any = {
@@ -129,6 +121,7 @@ async function newSubscriptionLink(req: Request, res: Response) {
                     paymentLink: newRazorpaySubscription.short_url || null,
                     status: 'Pending',
                     amount: PLAN_PRICE,
+                    dueDate: null,
                     linkGeneratedAt: new Date(),
                 }
             );
@@ -334,4 +327,155 @@ async function cancelSubscription(req: Request, res: Response) {
     }
 }
 
-export { newSubscriptionLink, myActivePlans, cancelSubscription }
+/**
+ * Synchronous Subscription Verification Endpoint
+ * 
+ * Purpose:
+ * Immediately queries the Razorpay API to fetch the real-time status of a subscription
+ * after the user completes payment on the frontend, and synchronizes the state into MongoDB.
+ * 
+ * When to Call:
+ * Immediately inside the frontend checkout success handler:
+ * `handler: async (response) => { await verifySubscription({ subscriptionId: response.razorpay_subscription_id, paymentId: response.razorpay_payment_id }); }`
+ * 
+ * Why:
+ * Webhooks can suffer from latency, queue delays, or intermittent network drops (sometimes 30+ minutes).
+ * Synchronous verification allows the frontend to immediately confirm payment and unlock features for the user
+ * without waiting for background webhooks.
+ * 
+ * Coordination with Webhooks:
+ * Webhooks remain active as a reliable background safety net for automated recurring charges, offline events,
+ * and retries. Because both this verification endpoint and the webhook handlers use idempotent MongoDB operations
+ * (`findOneAndUpdate` and unique index on `razorpayPaymentId`), whichever executes first safely updates the database,
+ * and the subsequent one acts as a safe, duplicate-protected no-op.
+ */
+async function verifySubscription(req: Request, res: Response) {
+    try {
+        const { subscriptionId, paymentId } = req.body || {};
+        const userId = (req as any).user?._id;
+
+        console.log(`\n🔍 [VERIFY] Verifying subscription ${subscriptionId} for user ${userId}...`);
+
+        // 1. Validate subscriptionId presence
+        if (!subscriptionId || typeof subscriptionId !== 'string') {
+            return res.status(400).json({
+                success: false,
+                message: 'subscriptionId is required and must be a valid string.',
+            });
+        }
+
+        // 2. Locate subscription document in database
+        const dbSubscription = await SubscriptionModel.findOne({ razorpaySubscriptionId: subscriptionId });
+        if (!dbSubscription) {
+            return res.status(404).json({
+                success: false,
+                message: `Subscription with ID ${subscriptionId} not found in database.`,
+            });
+        }
+
+        // Ownership verification: ensure the requesting user owns the subscription
+        if (userId && dbSubscription.userid && dbSubscription.userid.toString() !== userId.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Unauthorized: You do not have permission to verify this subscription.',
+            });
+        }
+
+        // 3. Call Razorpay API to fetch real-time subscription status
+        let razorpaySubscription: any;
+        try {
+            razorpaySubscription = (await instance.subscriptions.fetch(subscriptionId)) as any;
+        } catch (rzpErr: any) {
+            console.error(`❌ [VERIFY] Razorpay fetch failed for ${subscriptionId}:`, rzpErr);
+            return res.status(502).json({
+                success: false,
+                message: rzpErr?.error?.description || rzpErr?.message || 'Failed to fetch subscription from Razorpay.',
+            });
+        }
+
+        const razorpayStatus = razorpaySubscription?.status?.toLowerCase();
+        console.log(`📡 [VERIFY] Razorpay real-time status: "${razorpayStatus}" for ${subscriptionId}`);
+
+        // 4. Map Razorpay status to database status
+        let mappedStatus: 'Active' | 'Pending' | 'Halted' | 'Completed' | 'Cancelled' | 'Paused' | 'PaymentFailed';
+        switch (razorpayStatus) {
+            case 'active':
+            case 'authenticated':
+                mappedStatus = 'Active';
+                break;
+            case 'pending':
+                mappedStatus = 'Pending';
+                break;
+            case 'halted':
+                mappedStatus = 'Halted';
+                break;
+            case 'completed':
+                mappedStatus = 'Completed';
+                break;
+            case 'cancelled':
+                mappedStatus = 'Cancelled';
+                break;
+            case 'paused':
+                mappedStatus = 'Paused';
+                break;
+            default:
+                mappedStatus = (dbSubscription.status as any) || 'Pending';
+                break;
+        }
+
+        // 5. Update subscription in MongoDB
+        const updateFields: any = {
+            status: mappedStatus,
+        };
+
+        // If Razorpay provided charge_at (Unix timestamp in seconds), sync next due date
+        if (razorpaySubscription.charge_at) {
+            updateFields.dueDate = new Date(razorpaySubscription.charge_at * 1000);
+        }
+
+        const updatedSubscription = await SubscriptionModel.findOneAndUpdate(
+            { razorpaySubscriptionId: subscriptionId },
+            updateFields,
+            { returnDocument: 'after' }
+        );
+
+        console.log(`💾 [VERIFY] Database updated: ${subscriptionId} → Status: ${mappedStatus}`);
+
+        // 6. Record transaction if paymentId provided and subscription is Active
+        if (paymentId && (mappedStatus === 'Active' || razorpayStatus === 'active')) {
+            try {
+                await TransactionModel.create({
+                    userId: dbSubscription.userid,
+                    razorpaySubscriptionId: subscriptionId,
+                    razorpayPaymentId: paymentId,
+                    amount: dbSubscription.amount || PLAN_PRICE,
+                    status: 'Success',
+                });
+                console.log(`✅ [VERIFY] Transaction logged: ₹${dbSubscription.amount || PLAN_PRICE} for user ${dbSubscription.userid}`);
+            } catch (txErr: any) {
+                if (txErr?.code === 11000) {
+                    console.log(`ℹ️ [VERIFY] Transaction with paymentId ${paymentId} already logged (idempotent duplicate skipped).`);
+                } else {
+                    console.error(`⚠️ [VERIFY] Could not create transaction record:`, txErr);
+                }
+            }
+        }
+
+        // 7. Return success response with current status
+        return res.status(200).json({
+            success: true,
+            status: mappedStatus,
+            subscriptionId: subscriptionId,
+            dueDate: updatedSubscription?.dueDate || null,
+        });
+
+    } catch (error: any) {
+        console.error('❌ [VERIFY] Subscription verification error:', error);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Internal server error while verifying subscription.',
+        });
+    }
+}
+
+export { newSubscriptionLink, myActivePlans, cancelSubscription, verifySubscription }

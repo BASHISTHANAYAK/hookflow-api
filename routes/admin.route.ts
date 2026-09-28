@@ -11,7 +11,7 @@ adminRouter.get('/admin/stats', mustLogin, adminOnly, getAdminStats);
 // GET  /api/admin/users            — paginated user table with subscription status
 adminRouter.get('/admin/users', mustLogin, adminOnly, getAdminUsers);
 
-// POST /api/admin/simulate-failure — demo "cheat code": instantly forces Overdue + fires reminder job
+// POST /api/admin/simulate-failure — demo "cheat code": instantly forces PaymentFailed + fires reminder job
 adminRouter.post('/admin/simulate-failure', mustLogin, adminOnly, simulateFailure);
 
 export default adminRouter;

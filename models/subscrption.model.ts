@@ -8,7 +8,7 @@ const subscrptionSchema = new mongoose.Schema({
 
     status: {
         type: String, enum: {
-            values: ['Active', 'Overdue', 'Cancelled', 'Pending', 'Completed', 'Paused'],
+            values: ['Active', 'Cancelled', 'Pending', 'Completed', 'Paused', 'PaymentFailed', 'Halted'],
             message: '{VALUES} is not a valid status option',
             default: 'Pending'
         }

@@ -34,12 +34,12 @@ async function getAdminStats(req: Request, res: Response) {
         ]);
         const totalRevenue = revenueResult[0]?.total ?? 0;
 
-        // -- 2 & 3. Active Users + Overdue Payments -----------------------------
+        // -- 2 & 3. Active Users + Failed Payments (PaymentFailed or Halted) --
         const subscriptionDateField = hasDateFilter ? { createdAt: dateFilter } : {};
 
         const [activeUsers, failedPayments] = await Promise.all([
-            SubscriptionModel.countDocuments({ status: 'Active',  ...subscriptionDateField }),
-            SubscriptionModel.countDocuments({ status: 'Overdue', ...subscriptionDateField }),
+            SubscriptionModel.countDocuments({ status: 'Active', ...subscriptionDateField }),
+            SubscriptionModel.countDocuments({ status: { $in: ['PaymentFailed', 'Halted'] }, ...subscriptionDateField }),
         ]);
 
         return res.status(200).json({
@@ -61,7 +61,7 @@ async function getAdminStats(req: Request, res: Response) {
 }
 
 // ─── Simulate Failure (Interview / Demo "cheat code") ─────────────────────────
-// Forces a user's subscription into Overdue, backdates dueDate by 24 hours so
+// Forces a user's subscription into PaymentFailed, backdates dueDate by 24 hours so
 // the DB state is logically consistent, then immediately fires the WhatsApp
 // reminder BullMQ job with zero delay — no need to wait 30 days for a real
 // Razorpay payment to fail.
@@ -79,14 +79,14 @@ async function simulateFailure(req: Request, res: Response) {
         }
 
         // 2. Force the state to match a real payment failure:
-        //    - status  → 'Overdue'
+        //    - status  → 'PaymentFailed'
         //    - dueDate → 24 hours ago (looks like a missed payment deadline)
         const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        subscription.status  = 'Overdue';
+        subscription.status  = 'PaymentFailed';
         subscription.dueDate = yesterday;
         await subscription.save();
 
-        console.log(`🧪 [SIMULATE] Forced subscription ${subscription.razorpaySubscriptionId} to Overdue for user ${userId}`);
+        console.log(`🧪 [SIMULATE] Forced subscription ${subscription.razorpaySubscriptionId} to PaymentFailed for user ${userId}`);
 
         // 3. Immediately enqueue the WhatsApp reminder job (delay: 0 = fires now).
         //    Payload matches exactly what the worker expects to unpack.

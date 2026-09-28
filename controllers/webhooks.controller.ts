@@ -145,12 +145,12 @@ async function razorWebhook(req: Request, res: Response) {
                 }
 
                 case 'subscription.pending': {
-                    console.log(`⚠️ [subscription.pending] Payment retry pending - Setting status to Overdue`);
+                    console.log(`⚠️ [subscription.pending] Payment retry pending - Setting status to PaymentFailed`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
-                        { status: 'Overdue' }
+                        { status: 'PaymentFailed' }
                     );
-                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Overdue`);
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: PaymentFailed`);
 
                     // Queue WhatsApp payment retry reminder immediately via BullMQ
                     await reminderQueue.add(
@@ -165,12 +165,12 @@ async function razorWebhook(req: Request, res: Response) {
                 }
 
                 case 'subscription.halted': {
-                    console.log(`🚨 [subscription.halted] Payment retries exhausted - Setting status to Overdue`);
+                    console.log(`🚨 [subscription.halted] Payment retries exhausted - Setting status to Halted`);
                     await SubscriptionModel.findOneAndUpdate(
                         { razorpaySubscriptionId: subscriptionId },
-                        { status: 'Overdue' }
+                        { status: 'Halted' }
                     );
-                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Overdue`);
+                    console.log(`💾 DB Updated: Subscription ${subscriptionId} → Status: Halted`);
 
                     // Queue critical payment failure WhatsApp reminder immediately via BullMQ
                     await reminderQueue.add(
