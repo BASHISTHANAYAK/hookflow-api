@@ -5,7 +5,6 @@ import type { Request, Response } from 'express';
 const saltRounds = 10;
 import jsonwebtoken from 'jsonwebtoken'
 import { config } from '../config/config.env.js';
-import { SubscriptionModel } from '../models/subscrption.model.js';
 
 
 async function userRegistraction(req: Request, res: Response) {
@@ -14,7 +13,6 @@ async function userRegistraction(req: Request, res: Response) {
         const { email, password, phoneNumber } = req.body
         const phoneRegex = /^\+91\d{10}$/
 
-        // Only run the validation if a phone number was actually provided in the request
         if (phoneNumber) {
             if (phoneNumber.length !== 13 || !phoneRegex.test(phoneNumber)) {
                 return res.status(400).json({
@@ -27,7 +25,6 @@ async function userRegistraction(req: Request, res: Response) {
 
         const userCreated = await UserModel.create({ email, password: hashPassword, phoneNumber })
 
-        // Generate JWT token for auto-login
         let token = jsonwebtoken.sign({ _id: userCreated._id }, config.jwtToken, { expiresIn: '10h' });
 
         res.json({
@@ -42,7 +39,6 @@ async function userRegistraction(req: Request, res: Response) {
         })
 
     } catch (error: any) {
-        console.log("error-", error.message)
         return res.status(500).json({
             message: "Registration failed, please try again"
         });
@@ -50,13 +46,10 @@ async function userRegistraction(req: Request, res: Response) {
 }
 
 
-//login
-
 async function userLogin(req: Request, res: Response) {
     try {
 
         const { email, password } = req.body
-        console.log("reqBody:", req.body)
         const getUser = await UserModel.findOne({ email })
 
         if (!getUser) {
@@ -65,7 +58,6 @@ async function userLogin(req: Request, res: Response) {
             });
         }
 
-        //compare
         const hasMatched = await bcrypt.compare(password, getUser.password)
         if (!hasMatched) {
             return res.json({
@@ -74,7 +66,6 @@ async function userLogin(req: Request, res: Response) {
         }
         let token = jsonwebtoken.sign({ _id: getUser._id }, config.jwtToken, { expiresIn: '10h' });
 
-        console.log({ token })
         res.json({
             message: "login successful",
             getUser: {
@@ -86,9 +77,8 @@ async function userLogin(req: Request, res: Response) {
         })
 
     } catch (error: any) {
-        console.log("error-", error.message)
         return res.status(500).json({
-            message: "Registration failed, please try again"
+            message: "Login failed, please try again"
         });
     }
 }

@@ -15,10 +15,7 @@ const subscrptionSchema = new mongoose.Schema({
     },
     dueDate: { type: Date, default: null },
 
-    // Tracks the exact moment a Razorpay payment link was generated for this user.
-    // Unlike updatedAt, this field is ONLY set by generatepaymentLink — webhook
-    // status updates (charged, overdue, etc.) never touch it, so it's a reliable
-    // signal for the 24-hour link-freshness check.
+    // Timestamp when checkout link was created (for 24h expiry check)
     linkGeneratedAt: { type: Date, default: null },
 },
 { timestamps: true })

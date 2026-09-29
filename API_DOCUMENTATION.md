@@ -175,7 +175,7 @@ curl -X GET "http://localhost:4000/api/myActivePlans?page=1&limit=10" \
 
 **Status Values & Frontend UI:**
 - **Active** - Green badge: "Next billing date: [dueDate]"
-- **PaymentFailed** - Orange/Red banner: "Payment Failed. Your subscription is past due. Renew now to restore access." + "Renew Subscription" button (calls `generate-link` to cancel old subscription and create a fresh one for instant checkout)
+- **PaymentFailed** - Orange/Red banner: "Payment Failed. Please update your card." + "Update Card" button (`requiresCardUpdate: true` → `subscription_card_change: 1`)
 - **Halted** - Red badge: "Subscription Halted (retries exhausted). Please start a new plan." + "Subscribe Again" button (creates new subscription)
 - **Pending** - Yellow badge: "Payment pending. Complete checkout."
 - **Cancelled** - Gray badge: "Plan cancelled. Access valid until [dueDate]"
@@ -235,7 +235,18 @@ curl -X POST http://localhost:4000/api/billing/generate-link \
 - For SDK Flow: `{"success": true, "subscriptionId": "sub_N2d3k4l5m6n7o8"}`
 - For Redirect Flow: `{"success": true, "paymentLink": "https://rzp.io/i/abc123xyz", "subscriptionId": "sub_N2d3k4l5m6n7o8"}`
 
-**Case 2: PaymentFailed / Halted / Cancelled / Stale Pending (> 24h) / First Time (200):**
+**Case 2: PaymentFailed - Card Update Required on Existing Subscription (200):**
+```json
+{
+  "success": true,
+  "requiresCardUpdate": true,
+  "subscriptionId": "sub_N2d3k4l5m6n7o8",
+  "razorpaySubscriptionId": "sub_N2d3k4l5m6n7o8"
+}
+```
+*Frontend opens Razorpay modal with `subscription_card_change: 1` using the existing subscription. In Live Mode, Razorpay automatically charges the last invoice upon card update and fires `subscription.charged` and `subscription.activated` webhooks to activate the subscription.*
+
+**Case 3: Halted / Cancelled / Stale Pending (> 24h) / First Time (200):**
 - For SDK Flow (`useSdk: true`):
 ```json
 {
@@ -251,7 +262,6 @@ curl -X POST http://localhost:4000/api/billing/generate-link \
   "subscriptionId": "sub_New123456789"
 }
 ```
-*Note: For `PaymentFailed`, the backend cancels the old stalled subscription in Razorpay and generates a fresh one so checkout charges immediately on the spot, avoiding mandate/order lockouts.*
 
 **Error Responses:**
 - `400` - Already have active subscription
@@ -260,25 +270,30 @@ curl -X POST http://localhost:4000/api/billing/generate-link \
 - `500` - Server error
 
 **Frontend Integration:**
-- Always pass `subscriptionId` to `new window.Razorpay(options).open()` with standard checkout (`subscription_card_change: false` / `0`).
+- If `requiresCardUpdate: true` - Open Razorpay checkout with `subscription_card_change: 1` using `subscriptionId`
+- If SDK flow (`useSdk: true` and no `requiresCardUpdate`) - Pass `subscriptionId` to `new window.Razorpay(options).open()` with `subscription_card_change: 0`
 - If `paymentLink` exists (redirect flow) - Redirect browser to `paymentLink` or open in iframe
 - Use Razorpay SDK: `https://checkout.razorpay.com/v1/checkout.js`
-- On payment success in `handler(response)` - call `POST /api/subscriptions/verify` with `{ subscriptionId: response.razorpay_subscription_id, paymentId: response.razorpay_payment_id }` for instant activation.
+- On payment success in `handler(response)` - call `POST /api/subscriptions/verify` with `{ subscriptionId: response.razorpay_subscription_id || data.subscriptionId, paymentId: response.razorpay_payment_id }`. Note: when updating a card for PaymentFailed, verify will keep status as `PaymentFailed` until Razorpay's background engine charges the invoice and webhooks confirm activation.
 - Refresh subscription status and show success toast/modal.
 
 **Razorpay Configuration:**
 ```javascript
 const options = {
   key: 'YOUR_RAZORPAY_KEY',
-  subscription_id: data.subscriptionId,
-  subscription_card_change: false, // Standard checkout, charges immediately
+  subscription_id: data.subscriptionId, // or razorpaySubscriptionId
+  subscription_card_change: data.requiresCardUpdate ? 1 : 0,
   handler: async function(response) {
-    // Instant synchronous verification:
-    await axios.post('/api/subscriptions/verify', {
-      subscriptionId: response.razorpay_subscription_id,
-      paymentId: response.razorpay_payment_id
-    });
-    // Subscription status is now Active immediately!
+    try {
+      await axios.post('/api/subscriptions/verify', {
+        subscriptionId: response.razorpay_subscription_id || data.subscriptionId,
+        paymentId: response.razorpay_payment_id
+      });
+      // In Live mode, webhooks (subscription.charged / subscription.activated)
+      // will confirm final activation.
+    } catch (err) {
+      console.error('Verification error, webhook will confirm:', err);
+    }
   }
 };
 const rzp = new Razorpay(options);
@@ -290,7 +305,7 @@ rzp.open();
 ### 2.3 Synchronously Verify Subscription
 **Endpoint:** `POST /api/subscriptions/verify` (or `POST /api/verify`)
 
-**Description:** Immediately query Razorpay's API to verify payment/mandate status and activate the subscription in MongoDB synchronously. Call this immediately in the frontend Razorpay `handler(response)` callback for instant access without waiting for webhooks.
+**Description:** Query Razorpay's API to verify payment/mandate status and activate the subscription in MongoDB synchronously. When `paymentId` is provided, the endpoint checks `instance.payments.fetch(paymentId)` directly: if the payment is `captured` (or `status === 'captured'`), the subscription is promoted to `Active` immediately. If not captured (or still authorized), it falls back to inspecting the subscription state. Call this immediately in the frontend Razorpay `handler(response)` callback for instant access without waiting for webhooks.
 
 **Headers:**
 ```
@@ -493,15 +508,17 @@ curl -X GET "http://localhost:3000/api/admin/users?page=1&limit=10" \
         "phoneNumber": "+919876543210",
         "status": "Active",
         "dueDate": "2026-10-18T00:00:00.000Z",
-        "amount": 499
+        "amount": 499,
+        "createdAt": "2026-09-29T13:19:50.309+05:30"
       },
       {
         "userId": "64f1a2b3c4d5e6f7a8b9c0d2",
         "email": "user2@example.com",
         "phoneNumber": "+919876543211",
-        "status": "Overdue",
+        "status": "PaymentFailed",
         "dueDate": "2026-09-17T00:00:00.000Z",
-        "amount": 499
+        "amount": 499,
+        "createdAt": "2026-09-18T10:30:15.120+05:30"
       }
     ],
     "pagination": {

@@ -19,14 +19,11 @@ async function mustLogin(req: Request, res: Response, next: NextFunction) {
         }
 
         const token = authHeader.split(" ")[1] as string;
-        console.log({ token })
 
         const decoded = jwt.verify(
             token,
             config.jwtToken
         ) as JwtPayload;
-
-        console.log({ decoded })
 
         if (!decoded?._id) {
             return res.status(401).json({
@@ -34,12 +31,10 @@ async function mustLogin(req: Request, res: Response, next: NextFunction) {
             });
         }
 
-        //find user
-
         const user = await UserModel.findById(decoded._id);
 
         if (user) {
-            (req as any).user = { _id: user._id, role: user.role }; // requires Express type extension
+            (req as any).user = { _id: user._id, role: user.role };
             return next();
         }
 
@@ -49,7 +44,7 @@ async function mustLogin(req: Request, res: Response, next: NextFunction) {
 
     } catch (error: unknown) {
         if (error instanceof Error) {
-            console.log(error.message);
+            console.error("Auth error:", error.message);
         }
 
         return res.status(401).json({

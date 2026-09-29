@@ -1,75 +1,84 @@
 import type { Request, Response } from 'express';
 import { UserModel } from '../models/user.model.js';
 
+function formatToIST(date: Date | string | null | undefined): string | null {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+
+    const istOffsetMs = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(d.getTime() + istOffsetMs);
+
+    const year = istDate.getUTCFullYear();
+    const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(istDate.getUTCDate()).padStart(2, '0');
+    const hours = String(istDate.getUTCHours()).padStart(2, '0');
+    const minutes = String(istDate.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(istDate.getUTCSeconds()).padStart(2, '0');
+    const ms = String(istDate.getUTCMilliseconds()).padStart(3, '0');
+
+    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}+05:30`;
+}
+
 async function getAdminUsers(req: Request, res: Response) {
     try {
-        // -- Pagination ---------------------------------------------------------
         const page  = Math.max(1, Number(req.query.page)  || 1);
         const limit = Math.max(1, Number(req.query.limit) || 10);
         const skip  = (page - 1) * limit;
-
-        // -- Concurrent queries -------------------------------------------------
-        // Run the aggregation and the total count in parallel — no sequential
-        // waterfall, both hit the DB at the same time.
         const [users, total] = await Promise.all([
-
-            // -- $lookup join: User ? Subscription -----------------------------
-            // Starting from UserModel avoids an N+1 loop. One aggregation pipeline
-            // replaces what would otherwise be: find all users ? for each user,
-            // query subscriptions ? stitch manually.
             UserModel.aggregate([
-                // 1. Filter out ADMIN users - only show CUSTOMER users
                 {
                     $match: {
                         role: 'CUSTOMER'
                     }
                 },
-                // 2. Join the subscriptions collection on userid
                 {
                     $lookup: {
-                        from: 'subscriptions',        // Mongoose pluralises model name "subscription"
+                        from: 'subscriptions',
                         localField: '_id',            // UserModel._id
                         foreignField: 'userid',       // SubscriptionModel.userid
                         as: 'subscriptionData',
                     },
                 },
-                // 2. Flatten the joined array.
-                //    preserveNullAndEmptyArrays: true ? users with NO subscription
-                //    still appear in the list (subscriptionData becomes undefined).
                 {
                     $unwind: {
                         path: '$subscriptionData',
                         preserveNullAndEmptyArrays: true,
                     },
                 },
-                // 3. Pagination at the DB level — skip/limit before projecting
-                //    keeps memory usage constant regardless of collection size.
                 { $skip: skip },
                 { $limit: limit },
-                // 4. Shape the document for the frontend data table.
-                //    $ifNull provides a safe default when no subscription exists.
                 {
                     $project: {
                         _id: 0,
                         userId:      '$_id',
                         email:       '$email',
                         phoneNumber: '$phoneNumber',
-                        status:  { $ifNull: ['$subscriptionData.status',  'None'] },
-                        dueDate: { $ifNull: ['$subscriptionData.dueDate', null]   },
-                        amount:  { $ifNull: ['$subscriptionData.amount',  0]      },
+                        status:    { $ifNull: ['$subscriptionData.status',    'None'] },
+                        dueDate:   { $ifNull: ['$subscriptionData.dueDate',   null]   },
+                        amount:    { $ifNull: ['$subscriptionData.amount',    0]      },
+                        createdAt: { $ifNull: ['$subscriptionData.createdAt', null]   },
                     },
                 },
             ]),
-
-            // -- Total count for pagination controls ----------------------------
-            UserModel.countDocuments(),
+            UserModel.countDocuments({ role: 'CUSTOMER' }),
         ]);
 
-        // -- Response -----------------------------------------------------------
+        // Format createdAt in IST
+        const formattedUsers = users.map((u: any) => ({
+            userId: u.userId,
+            email: u.email,
+            phoneNumber: u.phoneNumber,
+            status: u.status,
+            dueDate: u.dueDate,
+            amount: u.amount,
+            createdAt: formatToIST(u.createdAt),
+        }));
+
         return res.status(200).json({
             success: true,
             data: {
-                users,
+                users: formattedUsers,
                 pagination: {
                     total,
                     page,
@@ -80,7 +89,6 @@ async function getAdminUsers(req: Request, res: Response) {
         });
 
     } catch (error: any) {
-        console.error('Admin users error:', error);
         return res.status(500).json({
             success: false,
             message: error?.message || 'Failed to fetch users',

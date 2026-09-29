@@ -5,26 +5,21 @@ import { Queue } from 'bullmq';
 import { redisConnection } from '../config/redis.config.js';
 import { interaktTemplates } from '../config/config.model.js';
 
-// Shared queue instance — same channel the webhook controller writes to,
-// same channel the whatsapp worker listens on.
 const reminderQueue = new Queue('whatsapp-reminders', { connection: redisConnection });
 
 async function getAdminStats(req: Request, res: Response) {
     try {
-        // -- Optional Date Filtering --------------------------------------------
-        // Callers can narrow stats to a time window:
-        //   GET /api/admin/stats?startDate=2026-01-01&endDate=2026-12-31
-        // If omitted, all-time stats are returned.
         const { startDate, endDate } = req.query;
 
         const dateFilter: Record<string, any> = {};
         if (startDate) dateFilter.$gte = new Date(startDate as string);
-        if (endDate)   dateFilter.$lte = new Date(endDate as string);
+        if (endDate) {
+            const endDateTime = new Date(endDate as string);
+            endDateTime.setHours(23, 59, 59, 999); // Set to end of day (23:59:59.999)
+            dateFilter.$lte = endDateTime;
+        }
 
         const hasDateFilter = Object.keys(dateFilter).length > 0;
-
-        // -- 1. Total Revenue ---------------------------------------------------
-        // Source: TransactionModel (immutable ledger - never loses data on cancel)
         const revenueMatch: Record<string, any> = { status: 'Success' };
         if (hasDateFilter) revenueMatch.createdAt = dateFilter;
 
@@ -33,8 +28,6 @@ async function getAdminStats(req: Request, res: Response) {
             { $group: { _id: null, total: { $sum: '$amount' } } },
         ]);
         const totalRevenue = revenueResult[0]?.total ?? 0;
-
-        // -- 2 & 3. Active Users + Failed Payments (PaymentFailed or Halted) --
         const subscriptionDateField = hasDateFilter ? { createdAt: dateFilter } : {};
 
         const [activeUsers, failedPayments] = await Promise.all([
@@ -52,7 +45,6 @@ async function getAdminStats(req: Request, res: Response) {
         });
 
     } catch (error: any) {
-        console.error('Admin stats error:', error);
         return res.status(500).json({
             success: false,
             message: error?.message || 'Failed to fetch admin stats',
@@ -60,16 +52,11 @@ async function getAdminStats(req: Request, res: Response) {
     }
 }
 
-// ─── Simulate Failure (Interview / Demo "cheat code") ─────────────────────────
-// Forces a user's subscription into PaymentFailed, backdates dueDate by 24 hours so
-// the DB state is logically consistent, then immediately fires the WhatsApp
-// reminder BullMQ job with zero delay — no need to wait 30 days for a real
-// Razorpay payment to fail.
 async function simulateFailure(req: Request, res: Response) {
     try {
         const { userId } = req.body;
 
-        // 1. Find the subscription document for this user
+        // Find subscription for user
         const subscription = await SubscriptionModel.findOne({ userid: userId });
         if (!subscription) {
             return res.status(404).json({
@@ -78,18 +65,13 @@ async function simulateFailure(req: Request, res: Response) {
             });
         }
 
-        // 2. Force the state to match a real payment failure:
-        //    - status  → 'PaymentFailed'
-        //    - dueDate → 24 hours ago (looks like a missed payment deadline)
+        // Force PaymentFailed state with backdated dueDate
         const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
         subscription.status  = 'PaymentFailed';
         subscription.dueDate = yesterday;
         await subscription.save();
 
-        console.log(`🧪 [SIMULATE] Forced subscription ${subscription.razorpaySubscriptionId} to PaymentFailed for user ${userId}`);
-
-        // 3. Immediately enqueue the WhatsApp reminder job (delay: 0 = fires now).
-        //    Payload matches exactly what the worker expects to unpack.
+        // Enqueue WhatsApp reminder immediately
         await reminderQueue.add(
             'send-overdue-msg',
             {
@@ -98,10 +80,6 @@ async function simulateFailure(req: Request, res: Response) {
             },
             { delay: 0 }
         );
-
-        console.log(`📦 [SIMULATE] Reminder job queued instantly for subscription ${subscription.razorpaySubscriptionId}`);
-
-        // 4. Return the new DB state so the frontend can reflect it immediately
         return res.status(200).json({
             success: true,
             message: 'Simulated failure successful. Queue triggered.',
@@ -112,7 +90,6 @@ async function simulateFailure(req: Request, res: Response) {
         });
 
     } catch (error: any) {
-        console.error('Simulate failure error:', error);
         return res.status(500).json({
             success: false,
             message: error?.message || 'Failed to simulate payment failure',
