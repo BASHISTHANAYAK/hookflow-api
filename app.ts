@@ -18,11 +18,6 @@ app.use(express.json())
 app.use(allRoutes);
 
 
-//one health check route
-app.get('/', (req, res) => {
-    res.json({ message: "HookFlow API is running successfully!" });
-})
-
 //health check route for keep-alive pinging
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
